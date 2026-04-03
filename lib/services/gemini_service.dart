@@ -1,8 +1,10 @@
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:http/http.dart' as http;
 
 class GeminiService {
-  static const String _apiKey = 'AIzaSyBHbzaJiMOAsYJQc6Lw5fiMU4iJ0Dm4oBY'; // ← کلیلەکەت لێرە دابنێ
+  static const String _apiKey = 'AIzaSyBOdOWbBWb9nyMWVva4epwb9g-wAeXjfUE'; // ← کلیلەکەت لێرە دابنێ
 
   late final GenerativeModel _model;
 
@@ -13,27 +15,70 @@ class GeminiService {
     );
   }
 
+  static const _langMap = {
+    'Kurdish (Sorani)': 'ckb',
+    'Kurdish (Kurmanji)': 'ku',
+    'Arabic': 'ar',
+    'English': 'en',
+    'Turkish': 'tr',
+    'Persian': 'fa',
+    'German': 'de',
+    'French': 'fr',
+    'Spanish': 'es',
+    'Italian': 'it',
+    'Japanese': 'ja',
+    'Chinese': 'zh',
+    'Korean': 'ko',
+    'Russian': 'ru',
+    'Hindi': 'hi',
+  };
+
   /// وەرگێڕان لە زمانێکەوە بۆ زمانێکی تر
   Future<String> translate({
     required String text,
     required String fromLang,
     required String toLang,
   }) async {
+    final from = _langMap[fromLang] ?? 'en';
+    final to = _langMap[toLang] ?? 'en';
+    if (from == to) return text;
+
+    // Google Translate ئەوەل، Gemini فالبەک
     try {
-      final prompt = '''
-You are a professional translator. Translate the following text from $fromLang to $toLang.
-Only return the translated text, nothing else. No explanations, no quotes, no extra text.
-
-Text to translate:
-$text
-''';
-
-      final content = [Content.text(prompt)];
-      final response = await _model.generateContent(content);
-      return response.text?.trim() ?? 'وەرگێڕان نەکرا';
-    } catch (e) {
-      throw Exception('هەڵەیەک ڕوویدا لە وەرگێڕاندا: $e');
+      return await _fetchGoogleFree(from, to, text);
+    } catch (_) {
+      return _fetchGemini(text: text, fromLang: fromLang, toLang: toLang);
     }
+  }
+
+  Future<String> _fetchGoogleFree(String from, String to, String text) async {
+    final uri = Uri.parse(
+      'https://translate.googleapis.com/translate_a/single?client=gtx&sl=$from&tl=$to&dt=t&q=${Uri.encodeComponent(text)}',
+    );
+    final res = await http.get(uri).timeout(const Duration(seconds: 6));
+    if (res.statusCode == 200) {
+      final data = jsonDecode(res.body);
+      final buffer = StringBuffer();
+      for (final part in data[0]) {
+        if (part[0] != null) buffer.write(part[0]);
+      }
+      final result = buffer.toString().trim();
+      if (result.isNotEmpty) return result;
+    }
+    throw Exception('Google free failed');
+  }
+
+  Future<String> _fetchGemini({
+    required String text,
+    required String fromLang,
+    required String toLang,
+  }) async {
+    final prompt =
+        'Translate the following text from $fromLang to $toLang. Only return the translated text, nothing else.\n\n$text';
+    final response = await _model.generateContent([Content.text(prompt)]);
+    final result = response.text?.trim();
+    if (result != null && result.isNotEmpty) return result;
+    throw Exception('Gemini failed');
   }
 
   /// وەرگێڕان و نووسینەوەی دەنگ لە زمانێکەوە بۆ زمانێکی تر
