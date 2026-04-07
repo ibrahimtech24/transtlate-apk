@@ -15,7 +15,10 @@ class GeminiService {
     );
   }
 
+  String? lastDetectedLang;
+
   static const _langMap = {
+    'Auto': 'auto',
     'Kurdish (Sorani)': 'ckb',
     'Kurdish (Kurmanji)': 'ku',
     'Arabic': 'ar',
@@ -39,15 +42,15 @@ class GeminiService {
     required String fromLang,
     required String toLang,
   }) async {
-    final from = _langMap[fromLang] ?? 'en';
+    final from = _langMap[fromLang] ?? 'auto';
     final to = _langMap[toLang] ?? 'en';
-    if (from == to) return text;
+    if (from != 'auto' && from == to) return text;
 
     // Google Translate ئەوەل، Gemini فالبەک
     try {
       return await _fetchGoogleFree(from, to, text);
     } catch (_) {
-      return _fetchGemini(text: text, fromLang: fromLang, toLang: toLang);
+      return _fetchGemini(text: text, fromLang: fromLang == 'Auto' ? 'the input language' : fromLang, toLang: toLang);
     }
   }
 
@@ -58,6 +61,10 @@ class GeminiService {
     final res = await http.get(uri).timeout(const Duration(seconds: 6));
     if (res.statusCode == 200) {
       final data = jsonDecode(res.body);
+      // زمانی ناسراو دەگرینەوە کاتێک Auto بەکاردێت
+      if (from == 'auto' && data.length > 2 && data[2] is String) {
+        lastDetectedLang = data[2] as String;
+      }
       final buffer = StringBuffer();
       for (final part in data[0]) {
         if (part[0] != null) buffer.write(part[0]);
@@ -183,8 +190,20 @@ TRANSLATION:
     }
   }
 
+  /// ناوی زمان لە کۆدی زمانەوە
+  static String langNameFromCode(String code) {
+    const codeToName = {
+      'ckb': 'Kurdish (Sorani)', 'ku': 'Kurdish (Kurmanji)', 'ar': 'Arabic',
+      'en': 'English', 'tr': 'Turkish', 'fa': 'Persian', 'de': 'German',
+      'fr': 'French', 'es': 'Spanish', 'it': 'Italian', 'ja': 'Japanese',
+      'zh': 'Chinese', 'ko': 'Korean', 'ru': 'Russian', 'hi': 'Hindi',
+    };
+    return codeToName[code] ?? code.toUpperCase();
+  }
+
   /// زمانەکان دیاری دەکات
   static List<Map<String, String>> get supportedLanguages => [
+        {'code': 'Auto', 'name': 'ناساندنی خۆکار', 'flag': '🔍'},
         {'code': 'Kurdish (Sorani)', 'name': 'کوردی سۆرانی', 'flag': '🟢'},
         {'code': 'Kurdish (Kurmanji)', 'name': 'کوردی کورمانجی', 'flag': '🟡'},
         {'code': 'Arabic', 'name': 'عەرەبی', 'flag': '🇸🇦'},

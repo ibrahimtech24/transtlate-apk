@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:ui';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -10,6 +11,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mime/mime.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'services/gemini_service.dart';
 
 void main() {
@@ -28,14 +30,14 @@ class MainApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'وەرگێڕی کوردی',
+      title: 'ترانسلەیتی خێرا',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
         fontFamily: 'NotoSansArabic',
         useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFF030303),
-        colorSchemeSeed: const Color(0xFF8A2BE2),
+        scaffoldBackgroundColor: const Color(0xFF060D0A),
+        colorSchemeSeed: const Color(0xFF10B981),
       ),
       home: const TranslatorScreen(),
     );
@@ -56,8 +58,10 @@ class _TranslatorScreenState extends State<TranslatorScreen>
 
   String _translatedText = '';
   bool _isLoading = false;
-  String _fromLang = 'Kurdish (Sorani)';
+  String _fromLang = 'Auto';
   String _toLang = 'English';
+  String _detectedLang = '';
+  List<Map<String, dynamic>> _history = [];
 
   late AnimationController _pulseController;
   late AnimationController _fadeController;
@@ -93,6 +97,7 @@ class _TranslatorScreenState extends State<TranslatorScreen>
 
     _record = AudioRecorder();
     _flutterTts = FlutterTts();
+    _loadHistory();
   }
 
   @override
@@ -105,6 +110,222 @@ class _TranslatorScreenState extends State<TranslatorScreen>
     _flutterTts.stop();
     _record.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList('translation_history') ?? [];
+    if (mounted) {
+      setState(() {
+        _history = raw
+            .map((e) => Map<String, dynamic>.from(
+                  (jsonDecode(e) as Map).cast<String, dynamic>(),
+                ))
+            .toList();
+      });
+    }
+  }
+
+  Future<void> _saveToHistory(String input, String output) async {
+    if (input.trim().isEmpty || output.trim().isEmpty) return;
+    final entry = {
+      'from': _fromLang,
+      'to': _toLang,
+      'input': input.trim(),
+      'output': output.trim(),
+      'detected': _detectedLang,
+      'time': DateTime.now().toIso8601String(),
+    };
+    _history.insert(0, entry);
+    if (_history.length > 50) _history = _history.sublist(0, 50);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      'translation_history',
+      _history.map((e) => jsonEncode(e)).toList(),
+    );
+  }
+
+  void _showHistory() {
+    if (_history.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF172B1E),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white.withOpacity(0.08)),
+            ),
+            child: const Text('هێشتا هیچ مێژووێک نەكراوە',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white70, fontSize: 14)),
+          ),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+        ),
+      );
+      return;
+    }
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) {
+        return StatefulBuilder(builder: (context, setModalState) {
+          return Container(
+            height: MediaQuery.of(context).size.height * 0.78,
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F1C14),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+              border: Border.all(color: Colors.white.withOpacity(0.07)),
+            ),
+            child: Column(
+              children: [
+                Container(
+                  margin: const EdgeInsets.only(top: 14, bottom: 4),
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 16, 8),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                              colors: [Color(0xFF10B981), Color(0xFFF59E0B)]),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.history_rounded,
+                            color: Colors.white, size: 18),
+                      ),
+                      const SizedBox(width: 12),
+                      const Text('مێژووی وەرگێڕان',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800)),
+                      const Spacer(),
+                      TextButton.icon(
+                        onPressed: () async {
+                          setState(() => _history = []);
+                          setModalState(() {});
+                          final prefs = await SharedPreferences.getInstance();
+                          await prefs.remove('translation_history');
+                          if (mounted) Navigator.pop(context);
+                        },
+                        icon: const Icon(Icons.delete_sweep_rounded,
+                            color: Color(0xFFF87171), size: 18),
+                        label: const Text('سڕینەوە',
+                            style: TextStyle(
+                                color: Color(0xFFF87171), fontSize: 13)),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: ListView.separated(
+                    physics: const BouncingScrollPhysics(),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    itemCount: _history.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (context, i) {
+                      final h = _history[i];
+                      final fromDisplay = h['from'] == 'Auto' && (h['detected'] as String).isNotEmpty
+                          ? GeminiService.langNameFromCode(h['detected'] as String)
+                          : h['from'] as String;
+                      return GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            _inputController.text = h['input'] as String;
+                            _translatedText = h['output'] as String;
+                            _fromLang = h['from'] as String;
+                            _toLang = h['to'] as String;
+                          });
+                          _fadeController.forward();
+                          Navigator.pop(context);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.04),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                                color: Colors.white.withOpacity(0.07)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Text(
+                                    '$fromDisplay → ${h['to']}',
+                                    style: TextStyle(
+                                        color: const Color(0xFF10B981),
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700),
+                                  ),
+                                  const Spacer(),
+                                  Text(
+                                    _formatTime(h['time'] as String),
+                                    style: TextStyle(
+                                        color: Colors.white.withOpacity(0.3),
+                                        fontSize: 11),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                h['input'] as String,
+                                style: const TextStyle(
+                                    color: Colors.white70, fontSize: 14),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                h['output'] as String,
+                                style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          );
+        });
+      },
+    );
+  }
+
+  String _formatTime(String iso) {
+    try {
+      final dt = DateTime.parse(iso).toLocal();
+      final now = DateTime.now();
+      final diff = now.difference(dt);
+      if (diff.inMinutes < 1) return 'ئێستا';
+      if (diff.inMinutes < 60) return '${diff.inMinutes} خولەک';
+      if (diff.inHours < 24) return '${diff.inHours} کاتژمێر';
+      return '${diff.inDays} ڕۆژ';
+    } catch (_) {
+      return '';
+    }
   }
 
   String _getTtsLangCode(String lang) {
@@ -227,6 +448,7 @@ class _TranslatorScreenState extends State<TranslatorScreen>
               _isLoading = false;
             });
             _fadeController.forward();
+            _saveToHistory(result['transcription'] ?? '', result['translation'] ?? '');
           }
         } else {
           setState(() {
@@ -251,7 +473,7 @@ class _TranslatorScreenState extends State<TranslatorScreen>
         return Container(
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
-            color: const Color(0xFF111116),
+            color: const Color(0xFF0F1C14),
             borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
             border: Border.all(color: Colors.white.withOpacity(0.05)),
           ),
@@ -270,8 +492,8 @@ class _TranslatorScreenState extends State<TranslatorScreen>
               ListTile(
                 leading: Container(
                   padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(color: const Color(0xFF8A2BE2).withOpacity(0.2), shape: BoxShape.circle),
-                  child: const Icon(Icons.camera_alt_rounded, color: Color(0xFF8A2BE2)),
+                  decoration: BoxDecoration(color: const Color(0xFF10B981).withOpacity(0.2), shape: BoxShape.circle),
+                  child: const Icon(Icons.camera_alt_rounded, color: Color(0xFF10B981)),
                 ),
                 title: const Text('کامێرا دابگیرسێنە', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
                 onTap: () {
@@ -283,8 +505,8 @@ class _TranslatorScreenState extends State<TranslatorScreen>
               ListTile(
                 leading: Container(
                   padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(color: const Color(0xFF00BFFF).withOpacity(0.2), shape: BoxShape.circle),
-                  child: const Icon(Icons.photo_library_rounded, color: Color(0xFF00BFFF)),
+                  decoration: BoxDecoration(color: const Color(0xFFF59E0B).withOpacity(0.2), shape: BoxShape.circle),
+                  child: const Icon(Icons.photo_library_rounded, color: Color(0xFFF59E0B)),
                 ),
                 title: const Text('هەڵبژاردن لە گەلەری مۆبایل', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
                 onTap: () {
@@ -325,6 +547,7 @@ class _TranslatorScreenState extends State<TranslatorScreen>
           _isLoading = false;
         });
         _fadeController.forward();
+        _saveToHistory(result['extracted'] ?? '', result['translation'] ?? '');
       }
     } catch (e) {
       setState(() {
@@ -335,10 +558,12 @@ class _TranslatorScreenState extends State<TranslatorScreen>
   }
 
   void _swapLanguages() {
+    if (_fromLang == 'Auto') return; // نەتوانرێت Auto بگۆڕدرێتەوە
     setState(() {
       final temp = _fromLang;
       _fromLang = _toLang;
       _toLang = temp;
+      _detectedLang = '';
 
       if (_translatedText.isNotEmpty) {
         _inputController.text = _translatedText;
@@ -355,6 +580,7 @@ class _TranslatorScreenState extends State<TranslatorScreen>
     setState(() {
       _isLoading = true;
       _translatedText = '';
+      _detectedLang = '';
       _fadeController.reverse();
     });
 
@@ -365,11 +591,14 @@ class _TranslatorScreenState extends State<TranslatorScreen>
         toLang: _toLang,
       );
 
+      final detected = _geminiService.lastDetectedLang ?? '';
       setState(() {
         _translatedText = result;
+        _detectedLang = detected;
         _isLoading = false;
       });
       _fadeController.forward();
+      _saveToHistory(_inputController.text, result);
     } catch (e) {
       setState(() {
         _translatedText = 'هەڵە: ${e.toString().replaceAll('Exception: ', '')}';
@@ -388,7 +617,7 @@ class _TranslatorScreenState extends State<TranslatorScreen>
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
-                colors: [Color(0xFF8A2BE2), Color(0xFF4B0082)],
+                colors: [Color(0xFF10B981), Color(0xFF065F46)],
               ),
               borderRadius: BorderRadius.circular(16),
             ),
@@ -415,12 +644,14 @@ class _TranslatorScreenState extends State<TranslatorScreen>
   }
 
   String _getLangName(String code) {
+    if (code == 'Auto') return 'ناساندنی خۆکار';
     final lang = GeminiService.supportedLanguages
         .firstWhere((l) => l['code'] == code, orElse: () => {'name': code});
     return lang['name'] ?? code;
   }
 
   String _getLangFlag(String code) {
+    if (code == 'Auto') return '🔍';
     final lang = GeminiService.supportedLanguages
         .firstWhere((l) => l['code'] == code, orElse: () => {'flag': ''});
     return lang['flag'] ?? '';
@@ -429,7 +660,7 @@ class _TranslatorScreenState extends State<TranslatorScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF08080F),
+      backgroundColor: const Color(0xFF060D0A),
       extendBodyBehindAppBar: true,
       body: Stack(
         children: [
@@ -474,56 +705,50 @@ class _TranslatorScreenState extends State<TranslatorScreen>
       animation: _bgController,
       builder: (context, child) {
         final t = _bgController.value * 2 * math.pi;
+        final size = MediaQuery.of(context).size;
         return Stack(
           children: [
-            Container(color: const Color(0xFF08080F)),
-            Positioned(
-              top: -80 + 60 * math.sin(t * 0.7),
-              left: -60 + 40 * math.cos(t * 0.5),
-              child: Container(
-                width: 320,
-                height: 320,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(colors: [
-                    const Color(0xFF6C63FF).withOpacity(0.25),
-                    Colors.transparent,
-                  ]),
+            // Base gradient background
+            Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Color(0xFF060D0A),
+                    Color(0xFF080F0C),
+                    Color(0xFF060A06),
+                  ],
                 ),
               ),
             ),
+            // Orb 1 — emerald top-left
             Positioned(
-              bottom: -100 + 50 * math.cos(t * 0.6),
-              right: -80 + 40 * math.sin(t * 0.4),
-              child: Container(
-                width: 380,
-                height: 380,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(colors: [
-                    const Color(0xFF00D4FF).withOpacity(0.15),
-                    Colors.transparent,
-                  ]),
-                ),
-              ),
+              top: -100 + 70 * math.sin(t * 0.5),
+              left: -80 + 50 * math.cos(t * 0.4),
+              child: _glow(380, const Color(0xFF10B981), 0.18),
             ),
+            // Orb 2 — amber bottom-right
             Positioned(
-              top: MediaQuery.of(context).size.height * 0.45 + 30 * math.sin(t * 0.3),
-              left: MediaQuery.of(context).size.width * 0.3,
-              child: Container(
-                width: 200,
-                height: 200,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(colors: [
-                    const Color(0xFFFF6584).withOpacity(0.12),
-                    Colors.transparent,
-                  ]),
-                ),
-              ),
+              bottom: -120 + 60 * math.cos(t * 0.55),
+              right: -100 + 45 * math.sin(t * 0.45),
+              child: _glow(420, const Color(0xFFF59E0B), 0.14),
             ),
+            // Orb 3 — teal center
+            Positioned(
+              top: size.height * 0.38 + 40 * math.sin(t * 0.35),
+              left: size.width * 0.2 + 30 * math.cos(t * 0.28),
+              child: _glow(220, const Color(0xFF34D399), 0.10),
+            ),
+            // Orb 4 — warm amber top-right
+            Positioned(
+              top: 80 + 35 * math.cos(t * 0.62),
+              right: 20 + 25 * math.sin(t * 0.5),
+              child: _glow(180, const Color(0xFFFBBF24), 0.09),
+            ),
+            // Soft blur over everything
             BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 60, sigmaY: 60),
+              filter: ImageFilter.blur(sigmaX: 70, sigmaY: 70),
               child: Container(color: Colors.transparent),
             ),
           ],
@@ -532,47 +757,110 @@ class _TranslatorScreenState extends State<TranslatorScreen>
     );
   }
 
+  Widget _glow(double size, Color color, double opacity) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: RadialGradient(
+          colors: [color.withOpacity(opacity), Colors.transparent],
+          stops: const [0.0, 1.0],
+        ),
+      ),
+    );
+  }
+ 
   Widget _buildHeader() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
       child: Row(
         children: [
+          // Logo
           Container(
-            width: 44,
-            height: 44,
+            width: 46,
+            height: 46,
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(16),
               gradient: const LinearGradient(
-                colors: [Color(0xFF6C63FF), Color(0xFF00D4FF)],
+                colors: [Color(0xFF10B981), Color(0xFF059669)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF10B981).withOpacity(0.35),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ],
             ),
-            child: const Icon(Icons.translate_rounded, color: Colors.white, size: 22),
+            child: const Icon(Icons.translate_rounded, color: Colors.white, size: 24),
           ),
           const SizedBox(width: 14),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'ibrahim dev',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                  color: Colors.white,
-                  letterSpacing: -0.3,
+              ShaderMask(
+                shaderCallback: (bounds) => const LinearGradient(
+                  colors: [Color(0xFF10B981), Color(0xFFF59E0B)],
+                ).createShader(bounds),
+                child: const Text(
+                  'ibrahim dev',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white,
+                    letterSpacing: -0.4,
+                  ),
                 ),
               ),
               Text(
-                'تایبەت بەکارەکانی خۆم',
+                'وەرگێڕی زیرەکی کوردی',
                 style: TextStyle(
                   fontSize: 11,
-                  color: Colors.white.withOpacity(0.45),
+                  color: Colors.white.withOpacity(0.4),
                   fontWeight: FontWeight.w500,
-                  letterSpacing: 0.3,
                 ),
               ),
             ],
+          ),
+          const Spacer(),
+          // History button
+          GestureDetector(
+            onTap: _showHistory,
+            child: Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: const Color(0xFF10B981).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: const Color(0xFF10B981).withOpacity(0.2),
+                ),
+              ),
+              child: Stack(
+                alignment: Alignment.center,
+                clipBehavior: Clip.none,
+                children: [
+                  Icon(Icons.history_rounded,
+                      color: const Color(0xFF10B981).withOpacity(0.85), size: 22),
+                  if (_history.isNotEmpty)
+                    Positioned(
+                      top: 6,
+                      right: 6,
+                      child: Container(
+                        width: 7,
+                        height: 7,
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Color(0xFFF59E0B),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
         ],
       ),
@@ -582,32 +870,39 @@ class _TranslatorScreenState extends State<TranslatorScreen>
   Widget _buildLanguageSelector() {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.04),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withOpacity(0.07)),
+        color: const Color(0xFF0F1C14),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFF10B981).withOpacity(0.15)),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF10B981).withOpacity(0.05),
+            blurRadius: 20,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
-      padding: const EdgeInsets.all(6),
+      padding: const EdgeInsets.all(8),
       child: Row(
         children: [
           Expanded(child: _buildLangPill(_fromLang, true)),
           GestureDetector(
             onTap: _swapLanguages,
             child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 6),
-              width: 40,
-              height: 40,
+              margin: const EdgeInsets.symmetric(horizontal: 8),
+              width: 42,
+              height: 42,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: const LinearGradient(
-                  colors: [Color(0xFF6C63FF), Color(0xFF00D4FF)],
+                  colors: [Color(0xFF10B981), Color(0xFF059669)],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFF6C63FF).withOpacity(0.4),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
+                    color: const Color(0xFF10B981).withOpacity(0.45),
+                    blurRadius: 14,
+                    offset: const Offset(0, 5),
                   ),
                 ],
               ),
@@ -624,16 +919,17 @@ class _TranslatorScreenState extends State<TranslatorScreen>
     return GestureDetector(
       onTap: () => _showLanguagePicker(isFrom),
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
         decoration: BoxDecoration(
           color: isFrom
-              ? Colors.white.withOpacity(0.05)
-              : const Color(0xFF6C63FF).withOpacity(0.1),
-          borderRadius: BorderRadius.circular(14),
+              ? Colors.white.withOpacity(0.04)
+              : const Color(0xFF10B981).withOpacity(0.12),
+          borderRadius: BorderRadius.circular(16),
           border: Border.all(
             color: isFrom
-                ? Colors.white.withOpacity(0.06)
-                : const Color(0xFF6C63FF).withOpacity(0.3),
+                ? Colors.white.withOpacity(0.08)
+                : const Color(0xFF10B981).withOpacity(0.35),
+            width: 1.2,
           ),
         ),
         child: Row(
@@ -645,7 +941,7 @@ class _TranslatorScreenState extends State<TranslatorScreen>
               child: Text(
                 _getLangName(langCode),
                 style: TextStyle(
-                  color: isFrom ? Colors.white70 : Colors.white,
+                  color: isFrom ? Colors.white60 : const Color(0xFF34D399),
                   fontSize: 13,
                   fontWeight: isFrom ? FontWeight.w500 : FontWeight.w700,
                 ),
@@ -653,8 +949,13 @@ class _TranslatorScreenState extends State<TranslatorScreen>
               ),
             ),
             const SizedBox(width: 4),
-            Icon(Icons.keyboard_arrow_down_rounded,
-                color: Colors.white.withOpacity(0.4), size: 16),
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              color: isFrom
+                  ? Colors.white.withOpacity(0.35)
+                  : const Color(0xFF10B981).withOpacity(0.7),
+              size: 16,
+            ),
           ],
         ),
       ),
@@ -670,7 +971,7 @@ class _TranslatorScreenState extends State<TranslatorScreen>
         return Container(
           height: MediaQuery.of(context).size.height * 0.65,
           decoration: BoxDecoration(
-            color: const Color(0xFF0F0F1A),
+            color: const Color(0xFF0F1C14),
             borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
             border: Border.all(color: Colors.white.withOpacity(0.07)),
           ),
@@ -693,7 +994,7 @@ class _TranslatorScreenState extends State<TranslatorScreen>
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
                         gradient: const LinearGradient(
-                          colors: [Color(0xFF6C63FF), Color(0xFF00D4FF)],
+                          colors: [Color(0xFF10B981), Color(0xFFF59E0B)],
                         ),
                         borderRadius: BorderRadius.circular(10),
                       ),
@@ -724,6 +1025,8 @@ class _TranslatorScreenState extends State<TranslatorScreen>
                   separatorBuilder: (_, __) => const SizedBox(height: 6),
                   itemBuilder: (context, index) {
                     final lang = GeminiService.supportedLanguages[index];
+                    // Auto فەقەت بۆ زمانی سەرچاوە دیاریکراوە
+                    if (!isFrom && lang['code'] == 'Auto') return const SizedBox.shrink();
                     final isSelected = isFrom ? _fromLang == lang['code'] : _toLang == lang['code'];
 
                     return GestureDetector(
@@ -743,7 +1046,7 @@ class _TranslatorScreenState extends State<TranslatorScreen>
                         decoration: BoxDecoration(
                           gradient: isSelected
                               ? const LinearGradient(
-                                  colors: [Color(0xFF6C63FF), Color(0xFF00D4FF)],
+                                  colors: [Color(0xFF10B981), Color(0xFFF59E0B)],
                                   begin: Alignment.centerLeft,
                                   end: Alignment.centerRight,
                                 )
@@ -787,27 +1090,30 @@ class _TranslatorScreenState extends State<TranslatorScreen>
   }
 
   Widget _buildGlassCard({required Widget child, bool isInput = true}) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(24),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-        child: Container(
-          width: double.infinity,
-          decoration: BoxDecoration(
-            color: isInput
-                ? Colors.white.withOpacity(0.05)
-                : const Color(0xFF6C63FF).withOpacity(0.08),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(
-              color: isInput
-                  ? Colors.white.withOpacity(0.09)
-                  : const Color(0xFF6C63FF).withOpacity(0.35),
-              width: 1.2,
-            ),
-          ),
-          child: child,
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: isInput
+            ? const Color(0xFF0F1C14)
+            : const Color(0xFF0D1A10),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: isInput
+              ? Colors.white.withOpacity(0.06)
+              : const Color(0xFF10B981).withOpacity(0.3),
+          width: 1.2,
         ),
+        boxShadow: [
+          BoxShadow(
+            color: isInput
+                ? Colors.black.withOpacity(0.3)
+                : const Color(0xFF10B981).withOpacity(0.06),
+            blurRadius: 24,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
+      child: child,
     );
   }
 
@@ -822,16 +1128,26 @@ class _TranslatorScreenState extends State<TranslatorScreen>
             child: Row(
               children: [
                 Container(
-                  width: 6,
-                  height: 6,
-                  decoration: const BoxDecoration(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: Color(0xFF6C63FF),
+                    color: const Color(0xFF10B981),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF10B981).withOpacity(0.6),
+                        blurRadius: 6,
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  _getLangName(_fromLang),
+                  _fromLang == 'Auto'
+                      ? (_detectedLang.isNotEmpty
+                          ? 'ناسرا: ${GeminiService.langNameFromCode(_detectedLang)}'
+                          : 'ناساندنی خۆکار')
+                      : _getLangName(_fromLang),
                   style: TextStyle(
                     color: Colors.white.withOpacity(0.45),
                     fontSize: 12,
@@ -900,14 +1216,14 @@ class _TranslatorScreenState extends State<TranslatorScreen>
               children: [
                 _buildIconBtn(
                   icon: _isListening ? Icons.mic_rounded : Icons.mic_none_rounded,
-                  color: _isListening ? const Color(0xFFFF6584) : const Color(0xFF6C63FF),
+                  color: _isListening ? const Color(0xFFF87171) : const Color(0xFF10B981),
                   onTap: _listen,
                   label: _isListening ? 'وەست' : 'دەنگ',
                 ),
                 const SizedBox(width: 6),
                 _buildIconBtn(
                   icon: Icons.camera_alt_rounded,
-                  color: const Color(0xFF00D4FF),
+                  color: const Color(0xFFF59E0B),
                   onTap: _openCamera,
                   label: 'وێنە',
                 ),
@@ -961,18 +1277,24 @@ class _TranslatorScreenState extends State<TranslatorScreen>
               child: Row(
                 children: [
                   Container(
-                    width: 6,
-                    height: 6,
-                    decoration: const BoxDecoration(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: Color(0xFF00D4FF),
+                      color: const Color(0xFFF59E0B),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFFF59E0B).withOpacity(0.6),
+                          blurRadius: 6,
+                        ),
+                      ],
                     ),
                   ),
                   const SizedBox(width: 8),
                   Text(
                     _getLangName(_toLang),
                     style: const TextStyle(
-                      color: Color(0xFF00D4FF),
+                      color: Color(0xFFF59E0B),
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 0.5,
@@ -983,21 +1305,21 @@ class _TranslatorScreenState extends State<TranslatorScreen>
                     _buildActionChip(
                       icon: _isPlaying ? Icons.stop_rounded : Icons.volume_up_rounded,
                       label: _isPlaying ? 'وەست' : 'گوێ',
-                      color: _isPlaying ? const Color(0xFFFF6584) : const Color(0xFF6C63FF),
+                      color: _isPlaying ? const Color(0xFFF87171) : const Color(0xFF10B981),
                       onTap: () => _speak(_translatedText),
                     ),
                     const SizedBox(width: 6),
                     _buildActionChip(
                       icon: Icons.copy_rounded,
                       label: 'کۆپی',
-                      color: const Color(0xFF00D4FF),
+                      color: const Color(0xFFF59E0B),
                       onTap: _copyToClipboard,
                     ),
                     const SizedBox(width: 6),
                     _buildActionChip(
                       icon: Icons.share_rounded,
                       label: 'ناردن',
-                      color: const Color(0xFFFFD166),
+                      color: const Color(0xFF34D399),
                       onTap: _shareTranslation,
                     ),
                   ],
@@ -1013,7 +1335,7 @@ class _TranslatorScreenState extends State<TranslatorScreen>
                     height: 28,
                     child: CircularProgressIndicator(
                       strokeWidth: 2.5,
-                      valueColor: AlwaysStoppedAnimation(Color(0xFF6C63FF)),
+                      valueColor: AlwaysStoppedAnimation(Color(0xFF10B981)),
                     ),
                   ),
                 ),
@@ -1074,21 +1396,28 @@ class _TranslatorScreenState extends State<TranslatorScreen>
       onTap: _isLoading ? null : _translate,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        height: 60,
+        height: 62,
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(22),
           gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
             colors: _isLoading
-                ? [const Color(0xFF6C63FF).withOpacity(0.6), const Color(0xFF00D4FF).withOpacity(0.6)]
-                : [const Color(0xFF6C63FF), const Color(0xFF00D4FF)],
+                ? [
+                    const Color(0xFF10B981).withOpacity(0.5),
+                    const Color(0xFF059669).withOpacity(0.5),
+                  ]
+                : const [
+                    Color(0xFF10B981),
+                    Color(0xFF059669),
+                  ],
           ),
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF6C63FF).withOpacity(_isLoading ? 0.2 : 0.45),
-              blurRadius: 20,
-              offset: const Offset(0, 6),
+              color: const Color(0xFF10B981).withOpacity(_isLoading ? 0.15 : 0.4),
+              blurRadius: 24,
+              spreadRadius: -2,
+              offset: const Offset(0, 8),
             ),
           ],
         ),
@@ -1119,15 +1448,15 @@ class _TranslatorScreenState extends State<TranslatorScreen>
               : const Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.auto_awesome_rounded, color: Colors.white, size: 20),
-                    SizedBox(width: 10),
+                    Icon(Icons.bolt_rounded, color: Colors.white, size: 22),
+                    SizedBox(width: 8),
                     Text(
                       'وەرگێڕان',
                       style: TextStyle(
                         color: Colors.white,
-                        fontSize: 17,
+                        fontSize: 18,
                         fontWeight: FontWeight.w800,
-                        letterSpacing: 0.3,
+                        letterSpacing: 0.5,
                       ),
                     ),
                   ],
